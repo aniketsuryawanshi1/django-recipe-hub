@@ -9,21 +9,20 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
+
 from pathlib import Path
 import os
 from decouple import config  # type: ignore
 from dotenv import load_dotenv  # type: ignore
 from datetime import timedelta
 import logging
+from celery.schedules import crontab
 
 # Load environment variables
 load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-default-key-change-this")
@@ -58,7 +57,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    'corsheaders.middleware.CorsMiddleware',  # CORS middleware
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -71,21 +70,21 @@ MIDDLEWARE = [
 AUTH_USER_MODEL = 'authentication.User'
 
 # CORS Configuration
-CORS_ALLOW_ALL_ORIGINS = DEBUG  # Only allow all origins in development
+CORS_ALLOW_ALL_ORIGINS = DEBUG
 CORS_ALLOW_CREDENTIALS = True
 
-# Add your frontend URLs here
+# Frontend URLs
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",  # React default
+    # "http://localhost:3000",  # React default
     "http://localhost:5173",  # Vite default
-    "http://127.0.0.1:3000",
+    # "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
 ]
 
 if not DEBUG:
-    # Add production URLs
+    # Add production URLs here when deploying
     CORS_ALLOWED_ORIGINS.extend([
-        # Add your production frontend URLs here
+        # "https://your-production-domain.com",
     ])
 
 CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS.copy()
@@ -95,7 +94,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [BASE_DIR / 'templates'],
+        'DIRS': [],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -111,8 +110,6 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
@@ -121,7 +118,9 @@ DATABASES = {
         "PASSWORD": config("DB_PASSWORD", default="Andi4frc3@"),
         "HOST": config("DB_HOST", default="localhost"),
         "PORT": config("DB_PORT", default="5432"),
-
+        # "OPTIONS": {
+        #     'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+        # },
         "TEST": {
             "NAME": "test_" + config("DB_NAME", default="recipe_db"),
         }
@@ -129,8 +128,6 @@ DATABASES = {
 }
 
 # Password validation
-# https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
-
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -197,8 +194,6 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
-        'authentication.throttling.SellerRateThrottle',
-        'authentication.throttling.CustomerRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
         'anon': '100/hour',
@@ -212,16 +207,12 @@ REST_FRAMEWORK = {
 }
 
 # Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
-
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
-
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [
@@ -237,8 +228,6 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10MB
 
 # Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
-
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Celery Configuration
@@ -249,6 +238,37 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+CELERY_BEAT_SCHEDULE = {
+    'send-daily-email': {
+        'task': 'recipes.tasks.send_daily_email',
+        'schedule': crontab(hour=6, minute=0, day_of_week='1-5'),  # 1-5 = Mon-Fri
+        'options': {'timezone': 'UTC'},
+    },
+    'export-user-data-weekly': {
+        'task': 'recipes.tasks.export_user_data_weekly',
+        'schedule': crontab(hour=2, minute=0, day_of_week='0'),  # 0 = Sunday
+        'options': {'timezone': 'UTC'},
+    },
+    'cleanup-old-exports': {
+        'task': 'recipes.tasks.cleanup_old_exports',
+        'schedule': crontab(hour=3, minute=0, day_of_week='0'),  # 0 = Sunday
+        'options': {'timezone': 'UTC'},
+    },
+}
+
+# Celery task routing
+CELERY_TASK_ROUTES = {
+    'recipes.tasks.process_recipe_image': {'queue': 'images'},
+    'recipes.tasks.send_daily_email': {'queue': 'emails'},
+    'recipes.tasks.export_user_data_weekly': {'queue': 'exports'},
+    'recipes.tasks.cleanup_old_exports': {'queue': 'cleanup'},
+}
+
+# Celery worker configuration
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_MAX_TASKS_PER_CHILD = 1000
 
 # Email Configuration
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -264,7 +284,6 @@ if not EMAIL_HOST_USER or not EMAIL_HOST_PASSWORD:
     if DEBUG:
         EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
     else:
-        # Log warning about missing email configuration
         import logging
         logger = logging.getLogger(__name__)
         logger.warning("Email configuration is missing. Email functionality will not work.")
@@ -280,6 +299,14 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
     X_FRAME_OPTIONS = 'DENY'
+
+# Create required directories
+LOGS_DIR = BASE_DIR / 'logs'
+MEDIA_EXPORTS_DIR = MEDIA_ROOT / 'exports'
+
+for directory in [LOGS_DIR, MEDIA_EXPORTS_DIR, BASE_DIR / 'static']:
+    if not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
 
 # Logging Configuration
 LOGGING = {
@@ -310,12 +337,19 @@ LOGGING = {
         'file': {
             'level': 'ERROR',
             'class': 'logging.FileHandler',
-            'filename': BASE_DIR / 'logs' / 'django.log',
+            'filename': LOGS_DIR / 'django.log',
+            'formatter': 'verbose',
+        },
+        'celery_file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': LOGS_DIR / 'celery.log',
             'formatter': 'verbose',
         },
     },
     'root': {
         'handlers': ['console'],
+        'level': 'WARNING',
     },
     'loggers': {
         'django': {
@@ -328,23 +362,34 @@ LOGGING = {
             'level': 'DEBUG' if DEBUG else 'INFO',
             'propagate': False,
         },
+        'recipes': {
+            'handlers': ['console', 'file'],
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+        'celery': {
+            'handlers': ['console', 'celery_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'celery.task': {
+            'handlers': ['console', 'celery_file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
     },
 }
-
-# Create logs directory if it doesn't exist
-import os
-logs_dir = BASE_DIR / 'logs'
-if not os.path.exists(logs_dir):
-    os.makedirs(logs_dir)
 
 # Cache Configuration
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
         'LOCATION': os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/1'),
-        # 'OPTIONS': {
-        #     'CLIENT_CLASS': 'django_redis.client.DefaultClient',
-        # }
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
+        'KEY_PREFIX': 'recipe_platform',
+        'TIMEOUT': 300,  # 5 minutes default timeout
     }
 }
 
@@ -362,3 +407,9 @@ API_VERSION = 'v1'
 
 # Custom settings for your application
 MAX_UPLOAD_SIZE = 5242880  # 5MB
+RECIPE_IMAGE_MAX_SIZE = (800, 600)  # Max image dimensions
+RECIPE_IMAGE_QUALITY = 85  # JPEG quality for compressed images
+
+# Pagination settings
+DEFAULT_PAGE_SIZE = 20
+MAX_PAGE_SIZE = 100
